@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Mirror linked issue state and project status
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           PUBLIC_REPO: ${{ vars.PUBLIC_REPO }}
           PRIVATE_REPO: ${{ vars.PRIVATE_REPO }}
@@ -30,6 +30,9 @@ jobs:
             const sourceRepo = context.payload.repository.full_name;
             const publicRepo = process.env.PUBLIC_REPO;
             const privateRepo = process.env.PRIVATE_REPO;
+            const normalizedSourceRepo = (sourceRepo || "").toLowerCase();
+            const normalizedPublicRepo = (publicRepo || "").toLowerCase();
+            const normalizedPrivateRepo = (privateRepo || "").toLowerCase();
 
             if (!["closed", "reopened"].includes(action)) {
               core.info(`Ignoring action ${action}`);
@@ -41,7 +44,7 @@ jobs:
               return;
             }
 
-            if (sourceRepo !== publicRepo && sourceRepo !== privateRepo) {
+            if (normalizedSourceRepo !== normalizedPublicRepo && normalizedSourceRepo !== normalizedPrivateRepo) {
               core.info(`Ignoring untracked repo ${sourceRepo}`);
               return;
             }
@@ -135,9 +138,9 @@ jobs:
 
             const metadata = extractMetadata(sourceIssue.body);
             const linkedIssueUrl =
-              sourceRepo === publicRepo ? metadata.privateIssueUrl : metadata.publicIssueUrl;
+              normalizedSourceRepo === normalizedPublicRepo ? metadata.privateIssueUrl : metadata.publicIssueUrl;
 
-            let publicIssue = sourceRepo === publicRepo ? sourceIssue : null;
+            let publicIssue = normalizedSourceRepo === normalizedPublicRepo ? sourceIssue : null;
 
             if (linkedIssueUrl) {
               const targetRef = parseIssueUrl(linkedIssueUrl);
@@ -150,7 +153,7 @@ jobs:
                 core.info(`Linked issue ${linkedIssueUrl} already in state ${desiredState}.`);
               }
 
-              if (!publicIssue && targetRef.full_name === publicRepo) {
+              if (!publicIssue && targetRef.full_name.toLowerCase() === normalizedPublicRepo) {
                 publicIssue = targetIssue;
               }
             } else {
