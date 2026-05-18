@@ -37,14 +37,6 @@ jobs:
               return;
             }
 
-            if (
-              normalizedSourceRepo !== normalizedPublicRepo &&
-              normalizedSourceRepo !== normalizedPrivateRepo
-            ) {
-              core.info(`Ignoring untracked repo ${sourceRepo}`);
-              return;
-            }
-
             function extractMetadata(body) {
               const text = body || "";
               const values = {};
@@ -54,11 +46,34 @@ jobs:
               }
 
               return {
+                publicIssueUrl: values.public || null,
+                privateIssueUrl: values.private || null,
+                projectItemId: values["project-item"] || null,
                 reporterDiscordId: values["reporter-discord-id"] || null,
                 notificationPrefs: values.notify
                   ? values.notify.split(",").map(value => value.trim()).filter(Boolean)
                   : []
               };
+            }
+
+            function parseIssueUrl(issueUrl) {
+              if (!issueUrl) return null;
+
+              try {
+                const url = new URL(issueUrl);
+                const parts = url.pathname.split("/").filter(Boolean);
+
+                if (parts.length < 4 || parts[2] !== "issues") {
+                  return null;
+                }
+
+                return {
+                  fullName: `${parts[0]}/${parts[1]}`.toLowerCase(),
+                  issueNumber: Number(parts[3])
+                };
+              } catch {
+                return null;
+              }
             }
 
             function truncate(value, maxLength = 1000) {
@@ -142,6 +157,31 @@ jobs:
               return;
             }
 
+            const publicRef = parseIssueUrl(metadata.publicIssueUrl);
+            const privateRef = parseIssueUrl(metadata.privateIssueUrl);
+            const sourceLooksPublic =
+              Boolean(metadata.privateIssueUrl) ||
+              Boolean(metadata.projectItemId) ||
+              normalizedSourceRepo === normalizedPublicRepo ||
+              normalizedSourceRepo === publicRef?.fullName;
+            const sourceLooksPrivate =
+              Boolean(metadata.publicIssueUrl) &&
+              !Boolean(metadata.privateIssueUrl) &&
+              !Boolean(metadata.projectItemId) &&
+              normalizedSourceRepo !== normalizedPublicRepo;
+
+            if (
+              normalizedPublicRepo &&
+              normalizedPrivateRepo &&
+              normalizedSourceRepo !== normalizedPublicRepo &&
+              normalizedSourceRepo !== normalizedPrivateRepo &&
+              !publicRef &&
+              !privateRef
+            ) {
+              core.info(`Ignoring untracked repo ${sourceRepo}`);
+              return;
+            }
+
             let embed = null;
 
             if (context.eventName === "issue_comment") {
@@ -159,24 +199,24 @@ jobs:
               }
 
               embed = {
-                title: "New Comment on Your Bug Report",
+                title: "New Comment",
                 description: truncate(comment.body, 4096),
                 color: 0x3B82F6,
                 fields: [
                   {
-                    name: "Issue",
+                    name: "Issue:",
                     value: `[#${issue.number}](${issue.html_url})`
                   },
                   {
-                    name: "Commented By",
+                    name: "Comment Author:",
                     value: actorLogin
                   },
                   {
-                    name: "Repository",
+                    name: "Repository:",
                     value: sourceRepo
                   },
                   {
-                    name: "Comment Link",
+                    name: "Comment Link:",
                     value: comment.html_url
                   }
                 ],
@@ -185,6 +225,11 @@ jobs:
             }
 
             if (context.eventName === "issues" && context.payload.action === "reopened") {
+              if (sourceLooksPrivate && !sourceLooksPublic) {
+                core.info("Skipping mirrored reopen notification to avoid duplicate DMs.");
+                return;
+              }
+
               if (!metadata.notificationPrefs.includes("status")) {
                 core.info("Reporter did not opt in to status notifications.");
                 return;
@@ -196,11 +241,11 @@ jobs:
                 color: 0x2563EB,
                 fields: [
                   {
-                    name: "Issue",
+                    name: "Issue:",
                     value: `[#${issue.number}](${issue.html_url})`
                   },
                   {
-                    name: "Repository",
+                    name: "Repository:",
                     value: sourceRepo
                   }
                 ],
@@ -209,35 +254,40 @@ jobs:
             }
 
             if (context.eventName === "issues" && context.payload.action === "closed") {
+              if (sourceLooksPrivate && !sourceLooksPublic) {
+                core.info("Skipping mirrored closure notification to avoid duplicate DMs.");
+                return;
+              }
+
               const classification = await getTimelineCloseClassification();
 
               if (metadata.notificationPrefs.includes("closures")) {
-                let outcomeLabel = "Solved bug";
-                let outcomeBody = "Your report was closed as resolved.";
+                let outcomeLabel = "Cleared Bug";
+                let outcomeBody = "We've solved your issue! Thank you for your contribution.";
 
                 if (classification === "not_planned") {
                   outcomeLabel = "Ignored / stale";
-                  outcomeBody = "Your report was closed as not planned.";
+                  outcomeBody = "Your issue has been ignored or marked as stale. You can reply to the issue to request a reevaluation.";
                 } else if (classification === "duplicate") {
                   outcomeLabel = "Closed as duplicate";
-                  outcomeBody = "Your report was closed because it was marked as a duplicate.";
+                  outcomeBody = "Your report was closed because it's either a duplicate or there is a similar report on file.";
                 }
 
                 embed = {
-                  title: "Bug Report Closed",
+                  title: "Issue Resolved",
                   description: outcomeBody,
                   color: classification === "not_planned" ? 0x6B7280 : 0x10B981,
                   fields: [
                     {
-                      name: "Outcome",
+                      name: "Outcome:",
                       value: outcomeLabel
                     },
                     {
-                      name: "Issue",
+                      name: "Issue:",
                       value: `[#${issue.number}](${issue.html_url})`
                     },
                     {
-                      name: "Repository",
+                      name: "Repository:",
                       value: sourceRepo
                     }
                   ],
@@ -245,16 +295,16 @@ jobs:
                 };
               } else if (metadata.notificationPrefs.includes("status")) {
                 embed = {
-                  title: "Bug Report Status Changed",
-                  description: "Your report was closed.",
+                  title: "Issue Status Updated",
+                  description: "Your issue was closed.",
                   color: 0x10B981,
                   fields: [
                     {
-                      name: "Issue",
+                      name: "Issue:",
                       value: `[#${issue.number}](${issue.html_url})`
                     },
                     {
-                      name: "Repository",
+                      name: "Repository:",
                       value: sourceRepo
                     }
                   ],
